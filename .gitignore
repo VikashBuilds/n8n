@@ -1,0 +1,17 @@
+# Environment variables (contains secrets)
+.env
+.env.local
+.env.production
+
+# Node
+node_modules/
+
+# n8n local data (when not using external DB)
+.n8n/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

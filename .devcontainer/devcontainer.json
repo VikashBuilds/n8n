@@ -1,0 +1,17 @@
+{
+  "name": "n8n Server",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "forwardPorts": [5678],
+  "portsAttributes": {
+    "5678": {
+      "label": "n8n",
+      "visibility": "public"
+    }
+  },
+  "postCreateCommand": "bash setup.sh",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    }
+  }
+}
