@@ -3,10 +3,10 @@ name: n8n Server (24/7)
 on:
   workflow_dispatch:
   schedule:
-    # Backup cron — restarts n8n if the chain breaks
+    # Backup cron — auto-restarts if chain breaks
     - cron: '0 */6 * * *'
 
-# Only 1 instance at a time
+# Only 1 instance at a time — new runs queue until current finishes
 concurrency:
   group: n8n-server
   cancel-in-progress: false
@@ -17,26 +17,52 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Install n8n
+      # ─── Cache n8n installation (8 min → 30 sec) ────────
+      - name: Cache n8n
+        uses: actions/cache@v4
+        id: n8n-cache
+        with:
+          path: |
+            /usr/local/lib/node_modules/n8n
+          key: n8n-install-${{ runner.os }}-v1
+
+      - name: Install n8n (skip if cached)
+        if: steps.n8n-cache.outputs.cache-hit != 'true'
         run: npm install -g n8n
 
-      - name: Install cloudflared
+      - name: Link n8n binary (from cache)
+        if: steps.n8n-cache.outputs.cache-hit == 'true'
+        run: |
+          ln -sf /usr/local/lib/node_modules/n8n/bin/n8n /usr/local/bin/n8n
+          echo "✅ n8n restored from cache: $(n8n --version)"
+
+      # ─── Cache cloudflared ──────────────────────────────
+      - name: Cache cloudflared
+        uses: actions/cache@v4
+        id: cf-cache
+        with:
+          path: /usr/local/bin/cloudflared
+          key: cloudflared-linux-amd64-v1
+
+      - name: Install cloudflared (skip if cached)
+        if: steps.cf-cache.outputs.cache-hit != 'true'
         run: |
           curl -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared
           chmod +x cloudflared
           sudo mv cloudflared /usr/local/bin/
 
-      - name: Start cloudflared tunnel (fixed URL)
+      # ─── Start tunnel (fixed URL: n8n.vikashbuilds.in) ──
+      - name: Start cloudflared tunnel
         env:
           TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
         run: |
-          echo "🔗 Starting Cloudflare Named Tunnel..."
-          echo "   URL: https://n8n.vikashbuilds.in"
+          echo "🔗 Starting Cloudflare Tunnel → n8n.vikashbuilds.in"
           cloudflared tunnel run --token "$TUNNEL_TOKEN" &
           sleep 5
           echo "✅ Tunnel connected!"
 
-      - name: Start n8n
+      # ─── Start n8n ──────────────────────────────────────
+      - name: Start n8n and run
         env:
           N8N_HOST: "0.0.0.0"
           N8N_PORT: "5678"
@@ -70,34 +96,33 @@ jobs:
           N8N_PID=$!
 
           # Wait for n8n to be ready
-          echo "⏳ Waiting for n8n to start..."
-          for i in $(seq 1 60); do
+          echo "⏳ Waiting for n8n..."
+          for i in $(seq 1 120); do
             if curl -s http://localhost:5678/healthz > /dev/null 2>&1; then
-              echo "✅ n8n is ready!"
+              echo "✅ n8n is LIVE at https://n8n.vikashbuilds.in"
               break
             fi
             sleep 2
           done
 
-          echo ""
-          echo "============================================"
-          echo "  🎉 n8n is LIVE!"
-          echo "  URL: https://n8n.vikashbuilds.in"
-          echo "============================================"
-          echo ""
+          # ─── Run for 5h 45m ──────────────────────────────
+          # At 5h45m: trigger next run (it queues)
+          # At 5h50m: stop this run
+          # Next run starts installing from cache (~30 sec)
+          # Total gap: ~1 minute instead of 8 minutes
+          
+          echo "⏰ Running until restart..."
+          sleep 20700  # 5 hours 45 minutes
 
-          # Run for 5 hours 50 minutes (leave 10 min buffer)
-          echo "⏰ Running for 5h 50m, then auto-restart..."
-          sleep 21000
+          echo "🔄 Pre-triggering next run while still alive..."
 
-          echo "🔄 Time's up — shutting down for restart..."
-          kill $N8N_PID 2>/dev/null || true
-
-      - name: Trigger next run (infinite chain)
+      # ─── Trigger next BEFORE stopping (overlap) ─────────
+      - name: Trigger next run (chain continues)
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "🔄 Triggering next workflow run..."
+          echo "🔄 Triggering next workflow..."
           gh workflow run n8n-server.yml --repo ${{ github.repository }}
-          echo "✅ Next run triggered — n8n will restart in ~30 seconds"
+          echo "✅ Next run queued — will start in ~30 sec after this stops"
+          echo "   n8n cached = instant install = minimal gap"
