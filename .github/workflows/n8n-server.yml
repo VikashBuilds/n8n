@@ -61,20 +61,31 @@ jobs:
           sleep 5
           echo "✅ Tunnel connected!"
 
-      # ─── Start n8n ──────────────────────────────────────
-      - name: Start n8n and run
+      # ─── Start n8n with health monitoring ───────────────
+      - name: Start n8n and monitor
         env:
+          # ─── Core Config ─────────────────────────────────
           N8N_HOST: "0.0.0.0"
           N8N_PORT: "5678"
           N8N_PROTOCOL: "https"
           N8N_PUSH_BACKEND: "sse"
           N8N_EDITOR_BASE_URL: "https://n8n.vikashbuilds.in"
-          WEBHOOK_URL: "https://n8n.vikashbuilds.in/"
+          N8N_WEBHOOK_URL: "https://n8n.vikashbuilds.in/"
           N8N_ENCRYPTION_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
           GENERIC_TIMEZONE: "Asia/Kolkata"
           N8N_ERROR_WORKFLOW_ENABLED: "false"
           N8N_METRICS: "false"
           N8N_DEFAULT_BINARY_DATA_MODE: "filesystem"
+
+          # ─── Future-Proofing (prevent deprecation) ───────
+          N8N_UNVERIFIED_PACKAGES_ENABLED: "true"
+          N8N_RUNNERS_TASK_TIMEOUT: "300"
+          N8N_COMPRESSION_NODE_MAX_DECOMPRESSED_SIZE_BYTES: "2147483648"
+          N8N_COMPRESSION_NODE_MAX_ZIP_ENTRIES: "5000"
+          N8N_RUNNERS_MODE: "internal"
+          N8N_DISABLE_PRODUCTION_MAIN_PROCESS: "false"
+
+          # ─── Database (Aiven PostgreSQL) ─────────────────
           DB_TYPE: "postgresdb"
           DB_POSTGRESDB_HOST: ${{ secrets.DB_POSTGRESDB_HOST }}
           DB_POSTGRESDB_PORT: ${{ secrets.DB_POSTGRESDB_PORT }}
@@ -83,6 +94,8 @@ jobs:
           DB_POSTGRESDB_PASSWORD: ${{ secrets.DB_POSTGRESDB_PASSWORD }}
           DB_POSTGRESDB_SSL: "true"
           DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED: "false"
+
+          # ─── Execution Settings ──────────────────────────
           EXECUTIONS_MODE: "regular"
           EXECUTIONS_DATA_SAVE_ON_SUCCESS: "none"
           EXECUTIONS_DATA_SAVE_ON_ERROR: "none"
@@ -105,24 +118,56 @@ jobs:
             sleep 2
           done
 
-          # ─── Run for 5h 45m ──────────────────────────────
-          # At 5h45m: trigger next run (it queues)
-          # At 5h50m: stop this run
-          # Next run starts installing from cache (~30 sec)
-          # Total gap: ~1 minute instead of 8 minutes
-          
-          echo "⏰ Running until restart..."
-          sleep 20700  # 5 hours 45 minutes
+          # ─── Health check loop ───────────────────────────
+          # Monitors n8n every 60 sec. If it crashes, auto-restarts.
+          RUNTIME=20700  # 5 hours 45 minutes in seconds
+          ELAPSED=0
+          HEALTH_INTERVAL=60
 
-          echo "🔄 Pre-triggering next run while still alive..."
+          while [ $ELAPSED -lt $RUNTIME ]; do
+            sleep $HEALTH_INTERVAL
+            ELAPSED=$((ELAPSED + HEALTH_INTERVAL))
 
-      # ─── Trigger next BEFORE stopping (overlap) ─────────
-      - name: Trigger next run (chain continues)
+            # Check if n8n is still alive
+            if ! curl -s http://localhost:5678/healthz > /dev/null 2>&1; then
+              echo "⚠️  n8n crashed at $(date). Restarting..."
+              n8n start &
+              N8N_PID=$!
+              sleep 30
+
+              if curl -s http://localhost:5678/healthz > /dev/null 2>&1; then
+                echo "✅ n8n recovered successfully!"
+              else
+                echo "❌ n8n failed to restart. Ending run to trigger chain restart."
+                break
+              fi
+            fi
+
+            # Log status every 30 minutes
+            if [ $((ELAPSED % 1800)) -eq 0 ]; then
+              HOURS=$((ELAPSED / 3600))
+              MINS=$(((ELAPSED % 3600) / 60))
+              echo "📊 Status: n8n running | Uptime: ${HOURS}h ${MINS}m | $(date)"
+            fi
+          done
+
+          echo "🔄 Scheduled restart — triggering next run..."
+          kill $N8N_PID 2>/dev/null || true
+
+      # ─── Trigger next run (chain continues) ─────────────
+      - name: Trigger next run
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           echo "🔄 Triggering next workflow..."
-          gh workflow run n8n-server.yml --repo ${{ github.repository }}
-          echo "✅ Next run queued — will start in ~30 sec after this stops"
-          echo "   n8n cached = instant install = minimal gap"
+          # Retry up to 3 times in case of API failure
+          for attempt in 1 2 3; do
+            if gh workflow run n8n-server.yml --repo ${{ github.repository }}; then
+              echo "✅ Next run triggered (attempt $attempt)"
+              exit 0
+            fi
+            echo "⚠️  Trigger failed (attempt $attempt), retrying in 10s..."
+            sleep 10
+          done
+          echo "❌ Failed to trigger next run after 3 attempts. Backup cron will restart within 6 hours."
