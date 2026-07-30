@@ -15,15 +15,20 @@ echo "============================================"
 echo ""
 
 # ─── Step 1: Load env vars ───────────────────────────
-if [ ! -f .env ]; then
-  echo "❌ .env file not found!"
-  echo "   Copy .env.example to .env and fill in your values:"
-  echo "   cp .env.example .env"
+ENV_FILE=""
+if [ -f .env.local ]; then
+  ENV_FILE=".env.local"
+elif [ -f .env ]; then
+  ENV_FILE=".env"
+else
+  echo "❌ No .env or .env.local file found!"
+  echo "   Copy .env.example to .env.local and fill in your values:"
+  echo "   cp .env.example .env.local"
   exit 1
 fi
 
-set -a && source .env && set +a
-echo "✅ Environment variables loaded"
+set -a && source "$ENV_FILE" && set +a
+echo "✅ Environment variables loaded from $ENV_FILE"
 
 # ─── Step 2: Validate required vars ──────────────────
 MISSING=""
