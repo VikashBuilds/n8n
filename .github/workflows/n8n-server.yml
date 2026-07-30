@@ -1,0 +1,103 @@
+name: n8n Server (24/7)
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Backup cron — restarts n8n if the chain breaks
+    - cron: '0 */6 * * *'
+
+# Only 1 instance at a time
+concurrency:
+  group: n8n-server
+  cancel-in-progress: false
+
+jobs:
+  run-n8n:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Install n8n
+        run: npm install -g n8n
+
+      - name: Install cloudflared
+        run: |
+          curl -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared
+          chmod +x cloudflared
+          sudo mv cloudflared /usr/local/bin/
+
+      - name: Start cloudflared tunnel (fixed URL)
+        env:
+          TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
+        run: |
+          echo "🔗 Starting Cloudflare Named Tunnel..."
+          echo "   URL: https://n8n.vikashbuilds.in"
+          cloudflared tunnel run --token "$TUNNEL_TOKEN" &
+          sleep 5
+          echo "✅ Tunnel connected!"
+
+      - name: Start n8n
+        env:
+          N8N_HOST: "0.0.0.0"
+          N8N_PORT: "5678"
+          N8N_PROTOCOL: "https"
+          N8N_PUSH_BACKEND: "sse"
+          N8N_EDITOR_BASE_URL: "https://n8n.vikashbuilds.in"
+          WEBHOOK_URL: "https://n8n.vikashbuilds.in/"
+          N8N_ENCRYPTION_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
+          GENERIC_TIMEZONE: "Asia/Kolkata"
+          N8N_ERROR_WORKFLOW_ENABLED: "false"
+          N8N_METRICS: "false"
+          N8N_DEFAULT_BINARY_DATA_MODE: "filesystem"
+          DB_TYPE: "postgresdb"
+          DB_POSTGRESDB_HOST: ${{ secrets.DB_POSTGRESDB_HOST }}
+          DB_POSTGRESDB_PORT: ${{ secrets.DB_POSTGRESDB_PORT }}
+          DB_POSTGRESDB_DATABASE: ${{ secrets.DB_POSTGRESDB_DATABASE }}
+          DB_POSTGRESDB_USER: ${{ secrets.DB_POSTGRESDB_USER }}
+          DB_POSTGRESDB_PASSWORD: ${{ secrets.DB_POSTGRESDB_PASSWORD }}
+          DB_POSTGRESDB_SSL: "true"
+          DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED: "false"
+          EXECUTIONS_MODE: "regular"
+          EXECUTIONS_DATA_SAVE_ON_SUCCESS: "none"
+          EXECUTIONS_DATA_SAVE_ON_ERROR: "none"
+          EXECUTIONS_DATA_SAVE_ON_PROGRESS: "false"
+          EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS: "true"
+          EXECUTIONS_DATA_PRUNE: "true"
+          EXECUTIONS_DATA_MAX_AGE: "1"
+        run: |
+          echo "🚀 Starting n8n..."
+          n8n start &
+          N8N_PID=$!
+
+          # Wait for n8n to be ready
+          echo "⏳ Waiting for n8n to start..."
+          for i in $(seq 1 60); do
+            if curl -s http://localhost:5678/healthz > /dev/null 2>&1; then
+              echo "✅ n8n is ready!"
+              break
+            fi
+            sleep 2
+          done
+
+          echo ""
+          echo "============================================"
+          echo "  🎉 n8n is LIVE!"
+          echo "  URL: https://n8n.vikashbuilds.in"
+          echo "============================================"
+          echo ""
+
+          # Run for 5 hours 50 minutes (leave 10 min buffer)
+          echo "⏰ Running for 5h 50m, then auto-restart..."
+          sleep 21000
+
+          echo "🔄 Time's up — shutting down for restart..."
+          kill $N8N_PID 2>/dev/null || true
+
+      - name: Trigger next run (infinite chain)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "🔄 Triggering next workflow run..."
+          gh workflow run n8n-server.yml --repo ${{ github.repository }}
+          echo "✅ Next run triggered — n8n will restart in ~30 seconds"
