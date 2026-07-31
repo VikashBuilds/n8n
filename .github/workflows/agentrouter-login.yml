@@ -1,0 +1,96 @@
+name: AgentRouter Daily Login
+
+on:
+  schedule:
+    # Run daily at 6:30 AM IST (1:00 AM UTC)
+    - cron: '0 1 * * *'
+  workflow_dispatch:  # Manual trigger for testing
+
+jobs:
+  daily-login:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Daily AgentRouter Visit
+        env:
+          AR_SESSION: ${{ secrets.AGENTROUTER_SESSION }}
+        run: |
+          echo "🔑 AgentRouter Daily Login — $(date '+%Y-%m-%d %H:%M:%S UTC')"
+          echo ""
+
+          if [ -z "$AR_SESSION" ]; then
+            echo "❌ ERROR: AGENTROUTER_SESSION secret is not set!"
+            echo "   Go to repo Settings → Secrets → Add AGENTROUTER_SESSION"
+            exit 1
+          fi
+
+          # Add random delay (1-5 min) to look natural — not exactly the same time daily
+          DELAY=$((RANDOM % 300 + 60))
+          echo "⏳ Waiting ${DELAY}s (random delay for natural behavior)..."
+          sleep $DELAY
+
+          # Visit the console/token page (same page you visit when you login)
+          echo "🌐 Visiting AgentRouter dashboard..."
+          HTTP_CODE=$(curl -s -o /tmp/ar_response.html -w "%{http_code}" \
+            -H "Cookie: session=${AR_SESSION}" \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36" \
+            -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8" \
+            -H "Accept-Language: en-US,en;q=0.9" \
+            -H "Accept-Encoding: gzip, deflate, br" \
+            -H "Referer: https://agentrouter.org/" \
+            -H "Connection: keep-alive" \
+            -H "Sec-Fetch-Dest: document" \
+            -H "Sec-Fetch-Mode: navigate" \
+            -H "Sec-Fetch-Site: same-origin" \
+            --compressed \
+            "https://agentrouter.org/console/token")
+
+          echo "   HTTP Status: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            # Check if response contains logged-in content (token page elements)
+            if grep -q "token\|console\|Create\|quota" /tmp/ar_response.html 2>/dev/null; then
+              echo "✅ SUCCESS — Dashboard loaded! Session is valid."
+              echo "   Daily login registered. Credits should be applied."
+            else
+              echo "⚠️  Got 200 but page content looks wrong (might be login redirect)"
+              echo "   Session may have expired. Please re-login and update the secret."
+            fi
+          elif [ "$HTTP_CODE" = "302" ] || [ "$HTTP_CODE" = "301" ]; then
+            echo "🔄 Redirected — Session likely expired."
+            echo "   Please re-login to AgentRouter and update AGENTROUTER_SESSION secret."
+            exit 1
+          elif [ "$HTTP_CODE" = "403" ]; then
+            echo "🛡️  Blocked by WAF — Try again later or update session cookie."
+            exit 1
+          else
+            echo "❌ Unexpected status: $HTTP_CODE"
+            echo "   Response preview:"
+            head -c 500 /tmp/ar_response.html 2>/dev/null || echo "(empty response)"
+            exit 1
+          fi
+
+          # Also visit the main console page for good measure
+          echo ""
+          echo "🌐 Visiting main console..."
+          HTTP_CODE2=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Cookie: session=${AR_SESSION}" \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36" \
+            -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" \
+            -H "Referer: https://agentrouter.org/console/token" \
+            --compressed \
+            "https://agentrouter.org/console")
+
+          echo "   Console HTTP Status: $HTTP_CODE2"
+
+          if [ "$HTTP_CODE2" = "200" ]; then
+            echo "✅ Console visit successful!"
+          fi
+
+          echo ""
+          echo "🎉 Daily login complete — $(date '+%Y-%m-%d %H:%M:%S UTC')"
+
+      - name: Cleanup
+        if: always()
+        run: rm -f /tmp/ar_response.html
