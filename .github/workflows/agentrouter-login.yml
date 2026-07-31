@@ -25,8 +25,8 @@ jobs:
             exit 1
           fi
 
-          # Add random delay (1-5 min) to look natural — not exactly the same time daily
-          DELAY=$((RANDOM % 300 + 60))
+          # Add random delay (10-60s) to look natural — not exactly the same time daily
+          DELAY=$((RANDOM % 50 + 10))
           echo "⏳ Waiting ${DELAY}s (random delay for natural behavior)..."
           sleep $DELAY
 
