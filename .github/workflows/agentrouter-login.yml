@@ -1,23 +1,77 @@
-name: AgentRouter Daily Login (DISABLED - runs locally via Task Scheduler)
-
-# DISABLED: AgentRouter WAF blocks all data center IPs (GitHub Actions).
-# Login runs locally on PC via Windows Task Scheduler instead.
-# Script: C:\Users\Vikash Meena\Desktop\Automations\agentrouter-daily-login.ps1
-# Schedule: Daily at 6:30 AM IST
+name: AgentRouter Daily Login
 
 on:
-  workflow_dispatch:  # Keep manual trigger for reference only
+  schedule:
+    # Run daily at 6:30 AM IST (1:00 AM UTC)
+    - cron: '0 1 * * *'
+  workflow_dispatch:  # Manual trigger for testing
 
 jobs:
-  info:
+  daily-login:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+
     steps:
-      - name: Info
+      - name: Daily AgentRouter Login via Cloudflare Worker
+        env:
+          AR_USERNAME: ${{ secrets.AR_USERNAME }}
+          AR_PASSWORD: ${{ secrets.AR_PASSWORD }}
+          WORKER_URL: ${{ secrets.AR_WORKER_URL }}
+          PROXY_SECRET: ${{ secrets.AR_PROXY_SECRET }}
         run: |
-          echo "This workflow is DISABLED."
-          echo "AgentRouter WAF blocks data center IPs (GitHub Actions runners)."
+          echo "🔑 AgentRouter Daily Login — $(date '+%Y-%m-%d %H:%M:%S UTC')"
           echo ""
-          echo "Login runs locally via Windows Task Scheduler:"
-          echo "  Script: agentrouter-daily-login.ps1"
-          echo "  Schedule: Daily at 6:30 AM IST"
-          echo "  Log: ar_login_history.log"
+
+          if [ -z "$AR_USERNAME" ] || [ -z "$AR_PASSWORD" ]; then
+            echo "❌ AR_USERNAME or AR_PASSWORD secret is not set!"
+            exit 1
+          fi
+
+          if [ -z "$WORKER_URL" ] || [ -z "$PROXY_SECRET" ]; then
+            echo "❌ AR_WORKER_URL or AR_PROXY_SECRET secret is not set!"
+            exit 1
+          fi
+
+          # Random delay 10-60s
+          DELAY=$((RANDOM % 50 + 10))
+          echo "⏳ Waiting ${DELAY}s (random delay)..."
+          sleep $DELAY
+
+          # Call Cloudflare Worker (bypasses AgentRouter WAF)
+          echo "🌐 Calling login via Cloudflare Worker..."
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST "$WORKER_URL" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $PROXY_SECRET" \
+            -d "{\"username\":\"${AR_USERNAME}\",\"password\":\"${AR_PASSWORD}\"}")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          echo "   HTTP Status: $HTTP_CODE"
+          echo "   Response: $BODY"
+
+          # Check for WAF block
+          if echo "$BODY" | grep -q "WAF_BLOCKED"; then
+            echo ""
+            echo "❌ WAF blocked even Cloudflare Worker IP!"
+            echo "   Need to try a different approach."
+            exit 1
+          fi
+
+          # Check for success
+          if echo "$BODY" | grep -q '"success":true'; then
+            echo ""
+            echo "✅ ✅ ✅  LOGIN SUCCESSFUL!"
+            echo "   Fresh session created via Cloudflare Worker → credits applied!"
+          elif [ "$HTTP_CODE" = "200" ]; then
+            echo ""
+            echo "✅ Got 200 OK — login likely successful"
+          else
+            echo ""
+            echo "❌ Login failed with status $HTTP_CODE"
+            exit 1
+          fi
+
+          echo ""
+          echo "🎉 Daily login complete — $(date '+%Y-%m-%d %H:%M:%S UTC')"
