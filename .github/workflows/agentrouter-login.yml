@@ -9,36 +9,97 @@ on:
 jobs:
   daily-login:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install Playwright
-        run: |
-          npm init -y > /dev/null 2>&1
-          npm install playwright@latest > /dev/null 2>&1
-          npx playwright install chromium --with-deps > /dev/null 2>&1
-          echo "✅ Playwright + Chromium installed"
-
-      - name: Run Daily Login
+      - name: Daily AgentRouter Login
         env:
-          GH_USER_SESSION: ${{ secrets.GH_USER_SESSION }}
-          GH_USER_SESSION_SS: ${{ secrets.GH_USER_SESSION_SS }}
-          GH_DOTCOM_USER: ${{ secrets.GH_DOTCOM_USER }}
-        run: node scripts/agentrouter-login.mjs
+          AR_USERNAME: ${{ secrets.AR_USERNAME }}
+          AR_PASSWORD: ${{ secrets.AR_PASSWORD }}
+        run: |
+          echo "🔑 AgentRouter Daily Login — $(date '+%Y-%m-%d %H:%M:%S UTC')"
+          echo ""
 
-      - name: Upload Screenshots (Debug)
+          if [ -z "$AR_USERNAME" ] || [ -z "$AR_PASSWORD" ]; then
+            echo "❌ ERROR: AR_USERNAME or AR_PASSWORD secret is not set!"
+            echo "   Go to repo Settings → Secrets → Add AR_USERNAME and AR_PASSWORD"
+            exit 1
+          fi
+
+          # Random delay 10-60s
+          DELAY=$((RANDOM % 50 + 10))
+          echo "⏳ Waiting ${DELAY}s (random delay)..."
+          sleep $DELAY
+
+          # Direct API login — bypasses WAF completely
+          echo "🌐 Calling login API..."
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST "https://agentrouter.org/api/user/login?turnstile=" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json, text/plain, */*" \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36" \
+            -H "Origin: https://agentrouter.org" \
+            -H "Referer: https://agentrouter.org/login" \
+            -H "Accept-Language: en-US,en;q=0.9" \
+            -H "Cache-Control: no-store" \
+            -c /tmp/ar_cookies.txt \
+            -d "{\"username\":\"${AR_USERNAME}\",\"password\":\"${AR_PASSWORD}\"}")
+
+          # Split response body and HTTP code
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          echo "   HTTP Status: $HTTP_CODE"
+          echo "   Response: $BODY"
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            # Check for success indicators in response
+            if echo "$BODY" | grep -qi "success\|ok\|login\|token\|session"; then
+              echo ""
+              echo "✅ ✅ ✅  LOGIN SUCCESSFUL!"
+              echo "   Fresh session created via API → credits should be applied!"
+            else
+              echo ""
+              echo "✅ Got 200 OK — login likely successful"
+              echo "   Response body: $BODY"
+            fi
+
+            # Show cookies that were set
+            if [ -f /tmp/ar_cookies.txt ]; then
+              echo ""
+              echo "🍪 Cookies received:"
+              cat /tmp/ar_cookies.txt | grep -v "^#" | grep -v "^$" || echo "   (no cookies)"
+            fi
+
+            # Visit console to confirm session is active
+            echo ""
+            echo "🌐 Verifying session by visiting console..."
+            VERIFY_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              -b /tmp/ar_cookies.txt \
+              -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36" \
+              "https://agentrouter.org/api/user/self")
+            
+            echo "   Console API status: $VERIFY_CODE"
+            if [ "$VERIFY_CODE" = "200" ]; then
+              echo "   ✅ Session verified — logged in!"
+            fi
+
+          elif [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
+            echo ""
+            echo "❌ Authentication failed!"
+            echo "   Check your AR_USERNAME and AR_PASSWORD secrets."
+            echo "   Response: $BODY"
+            exit 1
+          else
+            echo ""
+            echo "❌ Unexpected status: $HTTP_CODE"
+            echo "   Response: $BODY"
+            exit 1
+          fi
+
+          echo ""
+          echo "🎉 Daily login complete — $(date '+%Y-%m-%d %H:%M:%S UTC')"
+
+      - name: Cleanup
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: login-screenshots-${{ github.run_number }}
-          path: /tmp/ar_*.png
-          retention-days: 3
-          if-no-files-found: ignore
+        run: rm -f /tmp/ar_cookies.txt
