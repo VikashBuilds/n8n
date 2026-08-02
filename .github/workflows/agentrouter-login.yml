@@ -10,20 +10,40 @@ jobs:
   daily-login:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    strategy:
+      matrix:
+        account: [1, 2]
+      fail-fast: false  # Don't stop account 2 if account 1 fails
 
     steps:
-      - name: Daily AgentRouter Login via Cloudflare Worker
+      - name: "🔑 Login Account ${{ matrix.account }}"
         env:
-          AR_USERNAME: ${{ secrets.AR_USERNAME }}
-          AR_PASSWORD: ${{ secrets.AR_PASSWORD }}
+          # Account 1
+          AR_USERNAME_1: ${{ secrets.AR_USERNAME }}
+          AR_PASSWORD_1: ${{ secrets.AR_PASSWORD }}
+          # Account 2
+          AR_USERNAME_2: ${{ secrets.AR_USERNAME_2 }}
+          AR_PASSWORD_2: ${{ secrets.AR_PASSWORD_2 }}
+          # Shared
           WORKER_URL: ${{ secrets.AR_WORKER_URL }}
           PROXY_SECRET: ${{ secrets.AR_PROXY_SECRET }}
+          ACCOUNT: ${{ matrix.account }}
         run: |
-          echo "🔑 AgentRouter Daily Login — $(date '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "🔑 AgentRouter Daily Login — Account $ACCOUNT — $(date '+%Y-%m-%d %H:%M:%S UTC')"
           echo ""
 
-          if [ -z "$AR_USERNAME" ] || [ -z "$AR_PASSWORD" ]; then
-            echo "❌ AR_USERNAME or AR_PASSWORD secret is not set!"
+          # Select credentials based on account number
+          if [ "$ACCOUNT" = "1" ]; then
+            USERNAME="$AR_USERNAME_1"
+            PASSWORD="$AR_PASSWORD_1"
+          else
+            USERNAME="$AR_USERNAME_2"
+            PASSWORD="$AR_PASSWORD_2"
+          fi
+
+          if [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then
+            echo "❌ Credentials for Account $ACCOUNT are not set!"
+            echo "   Add AR_USERNAME_2 and AR_PASSWORD_2 to GitHub Secrets"
             exit 1
           fi
 
@@ -32,8 +52,8 @@ jobs:
             exit 1
           fi
 
-          # Random delay 10-60s
-          DELAY=$((RANDOM % 50 + 10))
+          # Random delay 10-60s (different per account to avoid simultaneous hits)
+          DELAY=$(( (RANDOM % 50 + 10) + (ACCOUNT * 15) ))
           echo "⏳ Waiting ${DELAY}s (random delay)..."
           sleep $DELAY
 
@@ -43,7 +63,7 @@ jobs:
             -X POST "$WORKER_URL" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $PROXY_SECRET" \
-            -d "{\"username\":\"${AR_USERNAME}\",\"password\":\"${AR_PASSWORD}\"}")
+            -d "{\"username\":\"${USERNAME}\",\"password\":\"${PASSWORD}\"}")
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
           BODY=$(echo "$RESPONSE" | sed '$d')
@@ -55,23 +75,22 @@ jobs:
           if echo "$BODY" | grep -q "WAF_BLOCKED"; then
             echo ""
             echo "❌ WAF blocked even Cloudflare Worker IP!"
-            echo "   Need to try a different approach."
             exit 1
           fi
 
           # Check for success
           if echo "$BODY" | grep -q '"success":true'; then
             echo ""
-            echo "✅ ✅ ✅  LOGIN SUCCESSFUL!"
-            echo "   Fresh session created via Cloudflare Worker → credits applied!"
+            echo "✅ ✅ ✅  ACCOUNT $ACCOUNT — LOGIN SUCCESSFUL!"
+            echo "   Fresh session → credits applied!"
           elif [ "$HTTP_CODE" = "200" ]; then
             echo ""
-            echo "✅ Got 200 OK — login likely successful"
+            echo "✅ Account $ACCOUNT — Got 200 OK — login likely successful"
           else
             echo ""
-            echo "❌ Login failed with status $HTTP_CODE"
+            echo "❌ Account $ACCOUNT — Login failed with status $HTTP_CODE"
             exit 1
           fi
 
           echo ""
-          echo "🎉 Daily login complete — $(date '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "🎉 Account $ACCOUNT done — $(date '+%Y-%m-%d %H:%M:%S UTC')"
