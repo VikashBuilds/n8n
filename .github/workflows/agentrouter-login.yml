@@ -2,13 +2,6 @@ name: AgentRouter Daily Login
 
 on:
   schedule:
-    # ┌──────────────────────────────────────────────────────┐
-    # │  GitHub Actions cron ONLY supports UTC.              │
-    # │  IST = UTC + 5:30                                    │
-    # │                                                      │
-    # │  11:30 PM IST = 18:00 UTC  →  cron: '0 18 * * *'    │
-    # │  NOTE: GitHub may delay cron by 5-60 min. Normal.    │
-    # └──────────────────────────────────────────────────────┘
     - cron: '0 18 * * *'
   workflow_dispatch:  # Manual trigger for testing
 
