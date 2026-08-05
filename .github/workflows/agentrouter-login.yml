@@ -2,8 +2,19 @@ name: AgentRouter Daily Login
 
 on:
   schedule:
+<<<<<<< Updated upstream
     # Run daily at 11:30 PM IST (6:00 PM UTC)
     - cron: '40 18 * * *'
+=======
+    # ┌──────────────────────────────────────────────────────┐
+    # │  GitHub Actions cron ONLY supports UTC.              │
+    # │  IST = UTC + 5:30                                    │
+    # │                                                      │
+    # │  11:30 PM IST = 18:00 UTC  →  cron: '0 18 * * *'    │
+    # │  NOTE: GitHub may delay cron by 5-60 min. Normal.    │
+    # └──────────────────────────────────────────────────────┘
+    - cron: '0 18 * * *'
+>>>>>>> Stashed changes
   workflow_dispatch:  # Manual trigger for testing
 
 jobs:
@@ -28,8 +39,11 @@ jobs:
           WORKER_URL: ${{ secrets.AR_WORKER_URL }}
           PROXY_SECRET: ${{ secrets.AR_PROXY_SECRET }}
           ACCOUNT: ${{ matrix.account }}
+          TZ: Asia/Kolkata  # Set timezone to IST for all date commands
         run: |
-          echo "🔑 AgentRouter Daily Login — Account $ACCOUNT — $(date '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "🔑 AgentRouter Daily Login — Account $ACCOUNT"
+          echo "   IST: $(date '+%Y-%m-%d %I:%M:%S %p IST')"
+          echo "   UTC: $(TZ=UTC date '+%Y-%m-%d %H:%M:%S UTC')"
           echo ""
 
           # Select credentials based on account number
@@ -93,4 +107,4 @@ jobs:
           fi
 
           echo ""
-          echo "🎉 Account $ACCOUNT done — $(date '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "🎉 Account $ACCOUNT done — $(date '+%Y-%m-%d %I:%M:%S %p IST')"
